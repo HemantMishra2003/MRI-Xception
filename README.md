@@ -71,9 +71,9 @@ __________________________________________
     0.92 |         _____/
     0.90 |    _____/
     0.88 |___/
-         +-------------------------------------------------
+         +------------------------------------------------------------------
           1    4    7   10   13   16   19
-                     Epochs
+                        Epochs
 
 
   ### Training , Validation Loss Curves : 
@@ -170,12 +170,12 @@ _________________________________________
 ### Test  Confusion Matrix Simlification : 
 ________________________________________
 
-Actual ↓              Predicted ↓
---------------    ----------------------
-Glioma        →   299 correct, 1 wrong
-Meningioma    →   305 correct, 1 wrong
-No Tumor      →   405 correct, 0 wrong
-Pituitary     →   299 correct, 1 wrong
+    Actual ↓              Predicted ↓
+    --------------    ----------------------
+    Glioma        →   299 correct, 1 wrong
+    Meningioma    →   305 correct, 1 wrong
+    No Tumor      →   405 correct, 0 wrong
+    Pituitary     →   299 correct, 1 wrong
 
 
 ### Recall Value – Medical Interpretation (MRI Brain Tumor Detection)
