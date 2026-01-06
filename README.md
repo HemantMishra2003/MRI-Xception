@@ -11,7 +11,7 @@ https://github.com/user-attachments/assets/1387e108-e032-4c76-8544-34be2f9b9d5b
 ## Project Important Links :
 ________________________________
 
-**Deployed Model Streamlit Link** :https://mri-efficientnet-b3-grsdkpgyhre5wldydrhpcv.streamlit.app/
+**Deployed Model Streamlit Link** :https://mri-xception-8cqqjkblxc5saqretu2cqx.streamlit.app/
 
 **Dataset Link** : https://zenodo.org/records/12735692
 
