@@ -1,31 +1,24 @@
 # ================= ALL IMPORTANT LIBRARIES =================
 import os
+import csv
+import smtplib
+from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
+
 import streamlit as st
 import tensorflow as tf
 import numpy as np
-from datetime import datetime
+import cv2
+import requests
 from PIL import Image
 
 from tensorflow.keras.preprocessing import image
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 import qrcode
-
-# ---- Added for "Nearby Hospitals" feature ----
-import requests
 from streamlit_geolocation import streamlit_geolocation
-
-# ---- Added for Grad-CAM heatmap ----
-import cv2
-
-# ---- Added for Email report feature ----
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
-
-# ---- Added for Comparison timeline / history ----
-import csv
 
 
 # ================= PAGE CONFIG =================
@@ -41,15 +34,15 @@ QR_DATA = "https://github.com/HemantMishra2003"
 #   UI
 st.markdown("""
 <style>
-label, .stTextInput label {
-    margin-bottom: -25px !important;
-}
-.stTextInput {
-    margin-top: -10px !important;
-}
 .stTextInput input {
     font-size: 17px !important;
     font-weight: 600 !important;
+}
+.field-label {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    margin-top: 14px;
 }
 @keyframes blink {
   0% {opacity: 1;}
@@ -74,6 +67,45 @@ label, .stTextInput label {
   font-size: 18px;
   margin-top: 6px;
   font-weight: 600;
+}
+.hospital-scroll-wrapper {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  padding: 10px 4px 20px 4px;
+}
+.hospital-card {
+  flex: 0 0 180px;
+  background: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+.hospital-card img {
+  width: 100%;
+  height: 110px;
+  object-fit: contain;
+  background: #f7f7f7;
+  padding: 14px 0;
+  display: block;
+}
+.hospital-card-body {
+  padding: 10px 12px;
+}
+.hospital-card-name {
+  margin: 0 0 4px 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #111;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hospital-card-distance {
+  margin: 0;
+  font-size: 13px;
+  color: #555;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -102,8 +134,8 @@ PDF_CANCER_LABEL_MAP = {
     "No Tumor": "NO TUMOR DETECTED"
 }
 
-# ================= MULTI-LANGUAGE SUPPORT (NEW FEATURE) =================
-# Simple key -> text dictionary translation. Does not touch model or PDF logic.
+
+# ================= MULTI-LANGUAGE SUPPORT =================
 TRANSLATIONS = {
     "English": {
         "title": "🧠 MRI AI Cancer Detector Model",
@@ -122,7 +154,7 @@ TRANSLATIONS = {
         "gradcam_header": "🔍 AI Focus Heatmap (Grad-CAM)",
         "gradcam_desc": "This shows which part of the scan the AI focused on to make its decision.",
         "symptom_header": "📝 Symptom Checklist",
-        "symptom_desc": "Optionally check any symptoms the patient has experienced. This adds a clinical context score alongside the AI's image-based result.",
+        "symptom_desc": "Optionally check any symptoms the patient has experienced.",
         "combined_risk_header": "⚠️ Combined Risk Assessment",
         "email_header": "📧 Email This Report",
         "email_desc": "Send this PDF report directly to an email address.",
@@ -130,6 +162,8 @@ TRANSLATIONS = {
         "email_send_btn": "Send Report via Email",
         "timeline_header": "📈 Patient Visit History",
         "timeline_desc": "Past predictions recorded for this patient name.",
+        "hospital_header": "🏥 Hospitals Near You",
+        "hospital_desc": "Since a tumor was detected, here are hospitals close to your current location.",
     },
     "हिन्दी (Hindi)": {
         "title": "🧠 एमआरआई एआई कैंसर डिटेक्टर मॉडल",
@@ -148,7 +182,7 @@ TRANSLATIONS = {
         "gradcam_header": "🔍 एआई फोकस हीटमैप (Grad-CAM)",
         "gradcam_desc": "यह दर्शाता है कि निर्णय लेने के लिए एआई ने स्कैन के किस भाग पर ध्यान केंद्रित किया।",
         "symptom_header": "📝 लक्षण चेकलिस्ट",
-        "symptom_desc": "वैकल्पिक रूप से रोगी द्वारा अनुभव किए गए किसी भी लक्षण की जांच करें। यह एआई के छवि-आधारित परिणाम के साथ एक नैदानिक संदर्भ स्कोर जोड़ता है।",
+        "symptom_desc": "वैकल्पिक रूप से रोगी द्वारा अनुभव किए गए किसी भी लक्षण की जांच करें।",
         "combined_risk_header": "⚠️ संयुक्त जोखिम मूल्यांकन",
         "email_header": "📧 यह रिपोर्ट ईमेल करें",
         "email_desc": "इस पीडीएफ रिपोर्ट को सीधे ईमेल पते पर भेजें।",
@@ -156,6 +190,8 @@ TRANSLATIONS = {
         "email_send_btn": "ईमेल के माध्यम से रिपोर्ट भेजें",
         "timeline_header": "📈 रोगी विज़िट इतिहास",
         "timeline_desc": "इस रोगी नाम के लिए दर्ज की गई पिछली भविष्यवाणियां।",
+        "hospital_header": "🏥 आपके आस-पास के अस्पताल",
+        "hospital_desc": "चूंकि एक ट्यूमर का पता चला है, यहां आपके वर्तमान स्थान के पास के अस्पताल हैं।",
     }
 }
 
@@ -167,35 +203,22 @@ def t(key, lang="English"):
     )
 
 
-# ================= LANGUAGE SELECTOR (NEW FEATURE) =================
+# ================= LANGUAGE SELECTOR =================
 lang = st.selectbox("🌐 Language / भाषा", options=list(TRANSLATIONS.keys()), index=0)
 
 # ================= HEADER =================
 st.title(t("title", lang))
-st.markdown(
-    f"<p style='color:white; margin-top:-10px; margin-left:75px; "
-    f"font-size:17px; font-weight:650;'>"
-    f"{t('subtitle', lang)}</p>",
-    unsafe_allow_html=True
-)
+st.caption(t("subtitle", lang))
 
 # ================= INPUT =================
-st.markdown(f"<p style='font-size:20px; font-weight:600;'>{t('patient_name_label', lang)}</p>", unsafe_allow_html=True)
-name = st.text_input("", placeholder=t("patient_name_ph", lang))
+st.markdown(f"<p class='field-label'>{t('patient_name_label', lang)}</p>", unsafe_allow_html=True)
+name = st.text_input("Patient Name", placeholder=t("patient_name_ph", lang), label_visibility="collapsed")
 
-st.markdown(f"<p style='font-size:20px; font-weight:600;'>{t('patient_age_label', lang)}</p>", unsafe_allow_html=True)
-age = st.number_input("", min_value=0, max_value=120, step=1)
+st.markdown(f"<p class='field-label'>{t('patient_age_label', lang)}</p>", unsafe_allow_html=True)
+age = st.number_input("Patient Age", min_value=0, max_value=120, step=1, label_visibility="collapsed")
 
-st.markdown(
-    f"<p style='font-size:20px; font-weight:600;'>{t('upload_label', lang)}</p>",
-    unsafe_allow_html=True
-)
-
-uploaded_file = st.file_uploader(
-    "",
-    type=["jpg", "png", "jpeg"]
-)
-
+st.markdown(f"<p class='field-label'>{t('upload_label', lang)}</p>", unsafe_allow_html=True)
+uploaded_file = st.file_uploader("Upload MRI Image", type=["jpg", "png", "jpeg"], label_visibility="collapsed")
 
 
 # ================= MODEL LOAD (WEIGHTS BASED – FINAL SAFE) =================
@@ -250,30 +273,51 @@ def predict_mri(uploaded_file):
     return detected, probs
 
 
-# ================= GRAD-CAM HEATMAP (NEW FEATURE) =================
+# ================= GRAD-CAM HEATMAP =================
 # Uses the ALREADY LOADED, ALREADY TRAINED model. No retraining, no weight
 # changes. Grad-CAM only inspects gradients of an existing forward pass.
-def generate_gradcam_heatmap(uploaded_file, pred_index=None):
+def _get_output_ndim(layer):
     """
-    Generates a Grad-CAM heatmap for the given uploaded MRI image using the
-    existing trained `model`. Returns an RGB uint8 numpy array (the original
-    image with the heatmap overlaid), or None if Grad-CAM could not be
-    computed (fails safely so it never breaks the main prediction flow).
+    Returns number of dims of a layer's output shape, trying multiple
+    attribute names for compatibility across TensorFlow/Keras versions.
+    (Older Keras used `.output_shape`; Keras 3 removed it in favor of
+    `.output.shape`, so we try the modern way first, then fall back.)
     """
     try:
-        # Prepare input the same way predict_mri does
+        shape = layer.output.shape
+        if shape is not None:
+            return len(shape)
+    except Exception:
+        pass
+    try:
+        shape = layer.output_shape
+        if shape is not None:
+            return len(shape)
+    except Exception:
+        pass
+    return None
+
+
+def generate_gradcam_heatmap(uploaded_file, pred_index=None):
+    """
+    Generates a Grad-CAM heatmap overlay for the given uploaded MRI image
+    using the existing trained `model`. Returns an RGB uint8 numpy array,
+    or None if it could not be computed (fails safely, never breaks the
+    main prediction flow).
+    """
+    try:
         img = image.load_img(uploaded_file, target_size=(299, 299))
         arr = image.img_to_array(img) / 255.0
         arr = np.expand_dims(arr, axis=0)
         original_rgb = np.uint8(image.img_to_array(img))
 
-        # The Xception base model is the first layer of our Sequential model
+        if len(model.layers) == 0:
+            return None
         base_model = model.layers[0]
 
-        # Find the last convolutional layer inside Xception automatically
         last_conv_layer = None
         for layer in reversed(base_model.layers):
-            if len(layer.output_shape) == 4:  # conv-like layers have 4D output
+            if _get_output_ndim(layer) == 4:
                 last_conv_layer = layer.name
                 break
 
@@ -287,8 +331,6 @@ def generate_gradcam_heatmap(uploaded_file, pred_index=None):
 
         with tf.GradientTape() as tape:
             conv_outputs, base_output = grad_model(arr)
-            # Pass base_model's output through the remaining layers
-            # (GlobalAveragePooling2D -> Dropout -> Dense -> Dropout -> Dense)
             x = base_output
             for layer in model.layers[1:]:
                 x = layer(x)
@@ -299,15 +341,16 @@ def generate_gradcam_heatmap(uploaded_file, pred_index=None):
             class_channel = predictions[:, pred_index]
 
         grads = tape.gradient(class_channel, conv_outputs)
-        pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+        if grads is None:
+            return None
 
+        pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
         conv_outputs = conv_outputs[0]
         heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
         heatmap = tf.squeeze(heatmap)
         heatmap = tf.maximum(heatmap, 0) / (tf.math.reduce_max(heatmap) + 1e-8)
         heatmap = heatmap.numpy()
 
-        # Resize heatmap to match original image size and colorize
         heatmap_resized = cv2.resize(heatmap, (original_rgb.shape[1], original_rgb.shape[0]))
         heatmap_uint8 = np.uint8(255 * heatmap_resized)
         heatmap_color = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
@@ -317,23 +360,44 @@ def generate_gradcam_heatmap(uploaded_file, pred_index=None):
         return overlayed
 
     except Exception as e:
-        # Fail safely — Grad-CAM is a bonus feature, must never break the app
         st.warning(f"Grad-CAM heatmap could not be generated: {e}")
         return None
 
 
-# ================= NEARBY HOSPITAL FINDER (NEW FEATURE) =================
-# Uses OpenStreetMap's free Overpass API — no API key required.
+# ================= NEARBY HOSPITAL FINDER =================
+# Uses OpenStreetMap's free Overpass API. The public overpass-api.de
+# instance is known to be slow/unstable, so we try several public
+# mirrors in sequence and stop at the first one that responds.
+OVERPASS_ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.ru/api/interpreter",
+]
+
+HOSPITAL_PLACEHOLDER_IMG = "https://cdn-icons-png.flaticon.com/512/2966/2966327.png"
+
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    """Straight-line distance (in km) between two GPS points."""
+    from math import radians, sin, cos, sqrt, atan2
+    R = 6371
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+    return R * 2 * atan2(sqrt(a), sqrt(1 - a))
+
+
 def find_nearby_hospitals(lat, lon, radius_km=5):
     """
-    Searches for hospitals within `radius_km` kilometers of the given
-    latitude/longitude using the Overpass API (OpenStreetMap data).
-    Returns a list of dicts: [{name, latitude, longitude, distance_km}, ...]
+    Searches for hospitals within `radius_km` of the given coordinates.
+    Tries multiple Overpass API mirrors in sequence (the free public
+    servers are sometimes slow/down). Returns (hospitals, error_message).
+    If successful, error_message is None. If all mirrors fail,
+    hospitals is [] and error_message explains what happened.
     """
     radius_m = int(radius_km * 1000)
-    overpass_url = "https://overpass-api.de/api/interpreter"
     query = f"""
-    [out:json][timeout:25];
+    [out:json][timeout:20];
     (
       node["amenity"="hospital"](around:{radius_m},{lat},{lon});
       way["amenity"="hospital"](around:{radius_m},{lat},{lon});
@@ -342,65 +406,60 @@ def find_nearby_hospitals(lat, lon, radius_km=5):
     out center;
     """
 
-    try:
-        response = requests.get(overpass_url, params={"data": query}, timeout=25)
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:
-        st.error(f"Could not fetch hospital data right now: {e}")
-        return []
+    last_error = None
+    for endpoint in OVERPASS_ENDPOINTS:
+        try:
+            response = requests.get(endpoint, params={"data": query}, timeout=20)
+            if response.status_code != 200:
+                last_error = f"Server returned status {response.status_code}"
+                continue
 
-    hospitals = []
-    for element in data.get("elements", []):
-        # Nodes have lat/lon directly; ways/relations use "center"
-        h_lat = element.get("lat") or element.get("center", {}).get("lat")
-        h_lon = element.get("lon") or element.get("center", {}).get("lon")
-        if h_lat is None or h_lon is None:
+            data = response.json()
+            hospitals = []
+            for element in data.get("elements", []):
+                h_lat = element.get("lat") or element.get("center", {}).get("lat")
+                h_lon = element.get("lon") or element.get("center", {}).get("lon")
+                if h_lat is None or h_lon is None:
+                    continue
+
+                hospital_name = element.get("tags", {}).get("name", "Unnamed Hospital")
+                distance_km = round(_haversine_km(lat, lon, h_lat, h_lon), 2)
+
+                hospitals.append({
+                    "name": hospital_name,
+                    "latitude": h_lat,
+                    "longitude": h_lon,
+                    "distance_km": distance_km
+                })
+
+            hospitals.sort(key=lambda h: h["distance_km"])
+            return hospitals, None  # success — stop trying other mirrors
+
+        except requests.exceptions.Timeout:
+            last_error = "The hospital search server took too long to respond."
+            continue
+        except requests.exceptions.RequestException as e:
+            last_error = f"Network error: {e}"
+            continue
+        except ValueError:
+            last_error = "The hospital search server returned an unexpected response."
             continue
 
-        name = element.get("tags", {}).get("name", "Unnamed Hospital")
-        distance_km = round(_haversine_km(lat, lon, h_lat, h_lon), 2)
-
-        hospitals.append({
-            "name": name,
-            "latitude": h_lat,
-            "longitude": h_lon,
-            "distance_km": distance_km
-        })
-
-    # Closest hospitals first
-    hospitals.sort(key=lambda h: h["distance_km"])
-    return hospitals
+    # All mirrors failed
+    return [], (last_error or "Could not reach any hospital search server.")
 
 
-def _haversine_km(lat1, lon1, lat2, lon2):
-    """Straight-line distance (in km) between two GPS points."""
-    from math import radians, sin, cos, sqrt, atan2
-    R = 6371  # Earth radius in km
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
-    return R * 2 * atan2(sqrt(a), sqrt(1 - a))
-
-
-# A free, no-key-required placeholder hospital image (public domain style icon
-# image hosted on a stable CDN). Used identically on every card since we are
-# not using any paid photo API.
-HOSPITAL_PLACEHOLDER_IMG = "https://cdn-icons-png.flaticon.com/512/2966/2966327.png"
-
-
-def render_nearby_hospitals_section():
+def render_nearby_hospitals_section(lang="English"):
     """
     Renders the 'Nearby Hospitals' section as a horizontally scrolling
     row of cards (image on top, hospital name + distance below), placed
     at the bottom of the page. Only called when a tumor is detected.
-    Does not affect model/prediction logic in any way.
     """
     st.markdown("---")
-    st.subheader("🏥 Hospitals Near You")
-    st.write("Since a tumor was detected, here are hospitals close to your current location.")
+    st.subheader(t("hospital_header", lang))
+    st.write(t("hospital_desc", lang))
 
-    radius_km = st.slider("Search radius (km)", min_value=1, max_value=20, value=5)
+    radius_km = st.slider("Search radius (km)", min_value=1, max_value=20, value=5, key="hospital_radius")
 
     st.write("📍 Allow location access below so we can find hospitals near you:")
     location = streamlit_geolocation()
@@ -411,44 +470,43 @@ def render_nearby_hospitals_section():
         st.success(f"Location detected: ({lat:.4f}, {lon:.4f})")
 
         with st.spinner("Searching nearby hospitals..."):
-            hospitals = find_nearby_hospitals(lat, lon, radius_km=radius_km)
+            hospitals, error = find_nearby_hospitals(lat, lon, radius_km=radius_km)
 
-        if hospitals:
+        if error:
+            st.error(
+                f"Could not fetch hospital data right now ({error}). "
+                "This is usually a temporary issue with the free map server — "
+                "please wait a moment and try again."
+            )
+        elif hospitals:
             st.write(f"Found **{len(hospitals)}** hospital(s) within {radius_km} km:")
 
-            # ---- Build one card per hospital: image on top, name + distance below ----
-            cards_html = '<div style="display:flex; gap:16px; overflow-x:auto; padding:10px 4px 20px;">'
+            cards_html = '<div class="hospital-scroll-wrapper">'
             for h in hospitals:
                 safe_name = h["name"].replace("<", "").replace(">", "")
                 cards_html += f"""
-                <div style="flex:0 0 180px; background:#ffffff; border:1px solid #e0e0e0;
-                            border-radius:12px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,0.08);">
-                    <img src="{HOSPITAL_PLACEHOLDER_IMG}" style="width:100%; height:110px;
-                         object-fit:contain; background:#f7f7f7; padding:14px 0;" />
-                    <div style="padding:10px 12px;">
-                        <p style="margin:0 0 4px; font-size:14px; font-weight:700; color:#111;
-                                  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-                            {safe_name}
-                        </p>
-                        <p style="margin:0; font-size:13px; color:#555;">
-                            {h['distance_km']} km away
-                        </p>
+                <div class="hospital-card">
+                    <img src="{HOSPITAL_PLACEHOLDER_IMG}" />
+                    <div class="hospital-card-body">
+                        <p class="hospital-card-name">{safe_name}</p>
+                        <p class="hospital-card-distance">{h['distance_km']} km away</p>
                     </div>
                 </div>
                 """
             cards_html += "</div>"
 
             st.markdown(cards_html, unsafe_allow_html=True)
-
         else:
             st.info(
-                "No hospitals found in this radius. Try increasing the search radius above."
+                f"No hospitals found within {radius_km} km using OpenStreetMap data. "
+                "Try increasing the search radius above — some areas have limited "
+                "hospital data mapped in OpenStreetMap."
             )
     else:
         st.warning("Click the location icon above and allow access to detect your position.")
 
 
-# ================= SYMPTOM CHECKLIST + RISK FUSION (NEW FEATURE) =================
+# ================= SYMPTOM CHECKLIST + RISK FUSION =================
 SYMPTOM_OPTIONS = {
     "headache": "Frequent headaches",
     "vision_issues": "Blurred or double vision",
@@ -468,10 +526,6 @@ SYMPTOM_WEIGHTS = {
 
 
 def render_symptom_checklist(lang="English"):
-    """
-    Renders a symptom checklist UI and returns the list of symptom keys
-    the user checked. Purely additive — does not affect prediction.
-    """
     st.subheader(t("symptom_header", lang))
     st.caption(t("symptom_desc", lang))
 
@@ -485,7 +539,6 @@ def render_symptom_checklist(lang="English"):
 
 
 def compute_symptom_score(selected_symptoms):
-    """Returns a 0-100 clinical concern score based on checked symptoms."""
     if not selected_symptoms:
         return 0.0
     raw = sum(SYMPTOM_WEIGHTS.get(s, 0) for s in selected_symptoms)
@@ -494,11 +547,6 @@ def compute_symptom_score(selected_symptoms):
 
 
 def compute_combined_risk(model_confidence_pct, symptom_score_pct, tumor_detected):
-    """
-    Fuses the AI model's confidence with the symptom-based score.
-    Model confidence is weighted higher (70%) since it is image-based
-    evidence; symptoms contribute the remaining 30% as clinical context.
-    """
     if not tumor_detected:
         return {
             "combined_score": None,
@@ -518,10 +566,6 @@ def compute_combined_risk(model_confidence_pct, symptom_score_pct, tumor_detecte
 
 
 def render_combined_risk_section(model_confidence_pct, tumor_detected, lang="English"):
-    """
-    Renders the symptom checklist and the resulting combined risk score.
-    Returns the risk_result dict so callers (PDF/email/history) can use it.
-    """
     st.markdown("---")
     selected_symptoms = render_symptom_checklist(lang)
     symptom_score = compute_symptom_score(selected_symptoms)
@@ -537,13 +581,8 @@ def render_combined_risk_section(model_confidence_pct, tumor_detected, lang="Eng
     return risk_result
 
 
-# ================= EMAIL REPORT (NEW FEATURE) =================
+# ================= EMAIL REPORT =================
 def send_report_email(sender_email, sender_app_password, receiver_email, pdf_path, patient_name):
-    """
-    Sends the generated PDF report via Gmail SMTP. Requires a Gmail
-    address + an "App Password" (not the normal Gmail password) for
-    the sender account. Returns (success: bool, message: str).
-    """
     try:
         msg = MIMEMultipart()
         msg["From"] = sender_email
@@ -575,7 +614,6 @@ def send_report_email(sender_email, sender_app_password, receiver_email, pdf_pat
 
 
 def render_email_section(pdf_path, patient_name, lang="English"):
-    """Renders the 'Email This Report' UI section."""
     st.markdown("---")
     st.subheader(t("email_header", lang))
     st.caption(t("email_desc", lang))
@@ -611,14 +649,12 @@ def render_email_section(pdf_path, patient_name, lang="English"):
                 st.error(message)
 
 
-# ================= COMPARISON TIMELINE / HISTORY (NEW FEATURE) =================
+# ================= COMPARISON TIMELINE / HISTORY =================
 HISTORY_FILE = "patient_history.csv"
 HISTORY_COLUMNS = ["timestamp", "patient_name", "age", "detected", "confidence", "combined_risk"]
 
 
 def log_prediction_to_history(patient_name, age, detected, confidence, combined_risk):
-    """Appends one prediction record to a local CSV file. Fails silently
-    (never breaks the app) if the file system is not writable."""
     try:
         file_exists = os.path.isfile(HISTORY_FILE)
         with open(HISTORY_FILE, "a", newline="") as f:
@@ -635,8 +671,6 @@ def log_prediction_to_history(patient_name, age, detected, confidence, combined_
 
 
 def get_patient_history(patient_name):
-    """Returns a list of dict rows for all past predictions matching this
-    patient name (case-insensitive). Returns [] if no history exists yet."""
     if not os.path.isfile(HISTORY_FILE):
         return []
     rows = []
@@ -652,11 +686,9 @@ def get_patient_history(patient_name):
 
 
 def render_timeline_section(patient_name, lang="English"):
-    """Renders the patient's past-visit history as a simple line chart
-    (confidence over time) plus a table, if at least 2 records exist."""
     history = get_patient_history(patient_name)
     if len(history) < 2:
-        return  # Nothing meaningful to compare yet
+        return
 
     st.markdown("---")
     st.subheader(t("timeline_header", lang))
@@ -813,7 +845,6 @@ def generate_pdf(img_path, name, age, detected, probs):
     return pdf
 
 
-
 # ================= MAIN FLOW =================
 if uploaded_file and name and age:
     with open("uploaded_temp.jpg", "wb") as f:
@@ -836,7 +867,7 @@ if uploaded_file and name and age:
     else:
         st.success(f"{t('no_tumor', lang)} (Confidence: {probs['No Tumor']}%)")
 
-    # ---- Added: Grad-CAM heatmap, only shown when a tumor is detected ----
+    # ---- Grad-CAM heatmap, only shown when a tumor is detected ----
     if detected != "No Tumor":
         st.markdown("---")
         st.subheader(t("gradcam_header", lang))
@@ -854,13 +885,12 @@ if uploaded_file and name and age:
             st.markdown(f"<b>{cls}</b>", unsafe_allow_html=True)
             st.markdown(f"{t('confidence_prefix', lang)}: {probs[cls]}%")
 
-    # ---- Added: Symptom checklist + combined risk fusion ----
+    # ---- Symptom checklist + combined risk fusion ----
     risk_result = render_combined_risk_section(probs[detected], detected != "No Tumor", lang)
 
-    # ---- Added: log this prediction to history ONLY ONCE per uploaded file.
-    # Streamlit reruns the whole script on every widget interaction (checking
-    # a symptom box, moving a slider, switching language), so without this
-    # guard the same visit would be logged many times. ----
+    # ---- Log this prediction to history ONLY ONCE per uploaded file.
+    # Streamlit reruns the whole script on every widget interaction, so
+    # without this guard the same visit would be logged many times. ----
     file_size = getattr(uploaded_file, "size", len(uploaded_file.getvalue()))
     file_signature = f"{uploaded_file.name}_{file_size}_{name}"
     if st.session_state.get("last_logged_file") != file_signature:
@@ -879,25 +909,23 @@ if uploaded_file and name and age:
         st.session_state["last_pdf_patient"] = name
 
     # ---- Show download + email options if a PDF has been generated in this
-    # session. Using session_state (not nesting inside the button's if-block)
-    # so these controls don't disappear when the email button itself is
-    # clicked and Streamlit reruns the script. ----
+    # session. Using session_state so these controls don't disappear when
+    # the email button itself is clicked and Streamlit reruns the script. ----
     if st.session_state.get("last_pdf_path") and os.path.isfile(st.session_state["last_pdf_path"]):
         pdf = st.session_state["last_pdf_path"]
         with open(pdf, "rb") as f:
             st.download_button(t("download_pdf_btn", lang), f, file_name=pdf)
 
-        # ---- Added: Email report section, shown once PDF exists ----
         render_email_section(pdf, st.session_state.get("last_pdf_patient", name), lang)
 
-    # ---- Added: Comparison timeline, shown only if patient has 2+ past visits ----
+    # ---- Comparison timeline, shown only if patient has 2+ past visits ----
     render_timeline_section(name, lang)
 
-    # ---- Added: footer section — nearby hospitals, shown at the bottom
-    # of the page, only if a tumor was detected ----
+    # ---- Footer section: nearby hospitals, shown at the bottom of the
+    # page, only if a tumor was detected ----
     if detected != "No Tumor":
-        render_nearby_hospitals_section()
-
+        render_nearby_hospitals_section(lang)
 
 else:
     st.info(t("please_fill", lang))
+
