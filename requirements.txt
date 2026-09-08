@@ -6,4 +6,5 @@ reportlab
 qrcode
 huggingface_hub
 requests
-
+streamlit-geolocation
+opencv-python-headless
