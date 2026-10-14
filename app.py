@@ -276,46 +276,34 @@ def predict_mri(uploaded_file):
 # ================= GRAD-CAM HEATMAP =================
 # Uses the ALREADY LOADED, ALREADY TRAINED model. No retraining, no weight
 # changes. Grad-CAM only inspects gradients of an existing forward pass.
-def _get_output_ndim(layer):
-    """
-    Returns number of dims of a layer's output shape, trying multiple
-    attribute names for compatibility across TensorFlow/Keras versions.
-    (Older Keras used `.output_shape`; Keras 3 removed it in favor of
-    `.output.shape`, so we try the modern way first, then fall back.)
-    """
-    try:
-        shape = layer.output.shape
-        if shape is not None:
-            return len(shape)
-    except Exception:
-        pass
-    try:
-        shape = layer.output_shape
-        if shape is not None:
-            return len(shape)
-    except Exception:
-        pass
-    return None
+# ================= MRI BOUNDING BOX =================
 
+def generate_bounding_box(uploaded_file, pred_index=None):
+    """
+    Generates an approximate bounding box using the existing
+    trained Xception model's Grad-CAM localization information.
 
-def generate_gradcam_heatmap(uploaded_file, pred_index=None):
+    No retraining and no model weight changes.
+    The heatmap is used internally but is not displayed.
     """
-    Generates a Grad-CAM heatmap overlay for the given uploaded MRI image
-    using the existing trained `model`. Returns an RGB uint8 numpy array,
-    or None if it could not be computed (fails safely, never breaks the
-    main prediction flow).
-    """
+
     try:
-        img = image.load_img(uploaded_file, target_size=(299, 299))
-        arr = image.img_to_array(img) / 255.0
+        # Preserve the original MRI dimensions
+        uploaded_file.seek(0)
+        original_img = Image.open(uploaded_file).convert("RGB")
+        original_rgb = np.array(original_img)
+
+        # Prepare image for the existing classifier
+        resized_img = original_img.resize((299, 299))
+        arr = np.asarray(resized_img, dtype=np.float32) / 255.0
         arr = np.expand_dims(arr, axis=0)
-        original_rgb = np.uint8(image.img_to_array(img))
 
-        if len(model.layers) == 0:
-            return None
+        # Find the Xception base model
         base_model = model.layers[0]
 
+        # Find the last four-dimensional layer
         last_conv_layer = None
+
         for layer in reversed(base_model.layers):
             if _get_output_ndim(layer) == 4:
                 last_conv_layer = layer.name
@@ -324,43 +312,124 @@ def generate_gradcam_heatmap(uploaded_file, pred_index=None):
         if last_conv_layer is None:
             return None
 
+        # Build a temporary model for localization
         grad_model = tf.keras.models.Model(
             inputs=base_model.input,
-            outputs=[base_model.get_layer(last_conv_layer).output, base_model.output]
+            outputs=[
+                base_model.get_layer(last_conv_layer).output,
+                base_model.output
+            ]
         )
 
+        # Compute gradients without training the model
         with tf.GradientTape() as tape:
+
             conv_outputs, base_output = grad_model(arr)
+
             x = base_output
+
             for layer in model.layers[1:]:
                 x = layer(x)
+
             predictions = x
 
             if pred_index is None:
-                pred_index = tf.argmax(predictions[0])
+                pred_index = int(tf.argmax(predictions[0]).numpy())
+
             class_channel = predictions[:, pred_index]
 
         grads = tape.gradient(class_channel, conv_outputs)
+
         if grads is None:
             return None
 
+        # Calculate the localization heatmap internally
         pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+
         conv_outputs = conv_outputs[0]
+
         heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
         heatmap = tf.squeeze(heatmap)
-        heatmap = tf.maximum(heatmap, 0) / (tf.math.reduce_max(heatmap) + 1e-8)
+
+        heatmap = tf.maximum(heatmap, 0)
+
+        max_value = float(tf.reduce_max(heatmap).numpy())
+
+        if max_value <= 1e-8:
+            return None
+
+        heatmap = heatmap / max_value
         heatmap = heatmap.numpy()
 
-        heatmap_resized = cv2.resize(heatmap, (original_rgb.shape[1], original_rgb.shape[0]))
-        heatmap_uint8 = np.uint8(255 * heatmap_resized)
-        heatmap_color = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
-        heatmap_color = cv2.cvtColor(heatmap_color, cv2.COLOR_BGR2RGB)
+        # Resize localization map to original MRI dimensions
+        h, w = original_rgb.shape[:2]
 
-        overlayed = cv2.addWeighted(heatmap_color, 0.4, original_rgb, 0.6, 0)
-        return overlayed
+        heatmap = cv2.resize(heatmap, (w, h))
+
+        # Threshold the strongest activation regions
+        threshold = 0.60 * float(heatmap.max())
+
+        binary_map = np.uint8(heatmap >= threshold) * 255
+
+        # Find candidate regions
+        contours, _ = cv2.findContours(
+            binary_map,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
+
+        if not contours:
+            return None
+
+        # Select the largest connected candidate region
+        contour = max(contours, key=cv2.contourArea)
+
+        x, y, box_w, box_h = cv2.boundingRect(contour)
+
+        # Reject a degenerate box
+        if box_w < 2 or box_h < 2:
+            return None
+
+        # Draw a red bounding box on the original MRI
+        output_img = cv2.cvtColor(
+            original_rgb.copy(),
+            cv2.COLOR_RGB2BGR
+        )
+
+        cv2.rectangle(
+            output_img,
+            (x, y),
+            (x + box_w, y + box_h),
+            (0, 0, 255),
+            3
+        )
+
+        # Label the box as approximate AI localization
+        label = "Approximate AI attention region"
+
+        label_y = max(y - 10, 25)
+
+        cv2.putText(
+            output_img,
+            label,
+            (x, label_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 0, 255),
+            2,
+            cv2.LINE_AA
+        )
+
+        # Convert back to RGB for Streamlit
+        output_img = cv2.cvtColor(
+            output_img,
+            cv2.COLOR_BGR2RGB
+        )
+
+        return output_img
 
     except Exception as e:
-        st.warning(f"Grad-CAM heatmap could not be generated: {e}")
+        st.warning(f"Bounding box could not be generated: {e}")
         return None
 
 
