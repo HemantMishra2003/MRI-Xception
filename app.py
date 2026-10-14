@@ -937,14 +937,36 @@ if uploaded_file and name and age:
         st.success(f"{t('no_tumor', lang)} (Confidence: {probs['No Tumor']}%)")
 
     # ---- Grad-CAM heatmap, only shown when a tumor is detected ----
-    if detected != "No Tumor":
-        st.markdown("---")
-        st.subheader(t("gradcam_header", lang))
-        st.caption(t("gradcam_desc", lang))
-        with st.spinner("Generating heatmap..."):
-            heatmap_img = generate_gradcam_heatmap(uploaded_file)
-        if heatmap_img is not None:
-            st.image(heatmap_img, caption="AI Focus Heatmap", width=320)
+    # ---- MRI Bounding Box ----
+if detected != "No Tumor":
+
+    st.markdown("---")
+    st.subheader("🎯 MRI Tumor Localization")
+
+    st.caption(
+        "The red box shows an approximate AI attention region, "
+        "not a confirmed tumor boundary."
+    )
+
+    with st.spinner("Generating bounding box..."):
+
+        uploaded_file.seek(0)
+
+        bounding_box_img = generate_bounding_box(
+            uploaded_file,
+            pred_index=CLASS_NAMES.index(detected)
+        )
+
+    if bounding_box_img is not None:
+        st.image(
+            bounding_box_img,
+            caption="MRI with Approximate Bounding Box",
+            width=400
+        )
+    else:
+        st.warning(
+            "Bounding box could not be generated for this image."
+        )
 
     st.subheader(t("reference_header", lang))
     cols = st.columns(4)
