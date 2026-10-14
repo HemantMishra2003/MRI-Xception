@@ -273,10 +273,18 @@ def predict_mri(uploaded_file):
     return detected, probs
 
 
-# ================= GRAD-CAM HEATMAP =================
-# Uses the ALREADY LOADED, ALREADY TRAINED model. No retraining, no weight
-# changes. Grad-CAM only inspects gradients of an existing forward pass.
 # ================= MRI BOUNDING BOX =================
+# Uses the existing trained model; no retraining or weight updates.
+# Grad-CAM is used internally to estimate an attention region only.
+
+def _get_output_ndim(layer):
+    """Return the number of dimensions in a Keras layer output, if available."""
+    try:
+        shape = layer.output.shape
+        return len(shape) if shape is not None else None
+    except Exception:
+        return None
+
 
 def generate_bounding_box(uploaded_file, pred_index=None):
     """
@@ -916,12 +924,18 @@ def generate_pdf(img_path, name, age, detected, probs):
 
 # ================= MAIN FLOW =================
 if uploaded_file and name and age:
+    # Keep the uploaded bytes available for saving, displaying, and prediction.
+    uploaded_file.seek(0)
+    uploaded_bytes = uploaded_file.getvalue()
+
     with open("uploaded_temp.jpg", "wb") as f:
-        f.write(uploaded_file.read())
+        f.write(uploaded_bytes)
 
-    st.image(uploaded_file, caption="Uploaded MRI", width=320)
+    st.image(uploaded_bytes, caption="Uploaded MRI", width=320)
 
+    uploaded_file.seek(0)
     detected, probs = predict_mri(uploaded_file)
+    uploaded_file.seek(0)
 
     if detected != "No Tumor":
         st.markdown(
@@ -936,37 +950,33 @@ if uploaded_file and name and age:
     else:
         st.success(f"{t('no_tumor', lang)} (Confidence: {probs['No Tumor']}%)")
 
-    # ---- Grad-CAM heatmap, only shown when a tumor is detected ----
-    # ---- MRI Bounding Box ----
-if detected != "No Tumor":
-
-    st.markdown("---")
-    st.subheader("🎯 MRI Tumor Localization")
-
-    st.caption(
-        "The red box shows an approximate AI attention region, "
-        "not a confirmed tumor boundary."
-    )
-
-    with st.spinner("Generating bounding box..."):
-
-        uploaded_file.seek(0)
-
-        bounding_box_img = generate_bounding_box(
-            uploaded_file,
-            pred_index=CLASS_NAMES.index(detected)
+    # ---- Approximate MRI attention bounding box (no retraining) ----
+    if detected != "No Tumor":
+        st.markdown("---")
+        st.subheader("🎯 MRI Tumor Localization")
+        st.caption(
+            "The red box marks an approximate AI attention region. "
+            "It is not a confirmed tumor boundary or a medical diagnosis."
         )
 
-    if bounding_box_img is not None:
-        st.image(
-            bounding_box_img,
-            caption="MRI with Approximate Bounding Box",
-            width=400
-        )
-    else:
-        st.warning(
-            "Bounding box could not be generated for this image."
-        )
+        with st.spinner("Generating approximate bounding box..."):
+            uploaded_file.seek(0)
+            bounding_box_img = generate_bounding_box(
+                uploaded_file,
+                pred_index=CLASS_NAMES.index(detected)
+            )
+
+        if bounding_box_img is not None:
+            st.image(
+                bounding_box_img,
+                caption="MRI with Approximate AI Attention Box",
+                width=400
+            )
+        else:
+            st.warning(
+                "A bounding box could not be generated for this image. "
+                "The classification result is still shown above."
+            )
 
     st.subheader(t("reference_header", lang))
     cols = st.columns(4)
