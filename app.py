@@ -276,6 +276,11 @@ def predict_mri(uploaded_file):
 # ================= MRI BOUNDING BOX =================
 # Uses the existing trained model; no retraining or weight updates.
 # Grad-CAM is used internally to estimate an attention region only.
+def _get_output_ndim(layer):
+    try:
+        return len(layer.output.shape)
+    except Exception:
+        return None
 
 def generate_bounding_box(uploaded_file, pred_index=None):
     """
