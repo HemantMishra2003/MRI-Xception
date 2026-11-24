@@ -268,10 +268,15 @@ def predict_mri(uploaded_file):
     arr = np.expand_dims(arr, axis=0)
 
     preds = model.predict(arr, verbose=0)[0]
-    probs = {CLASS_NAMES[i]: round(float(preds[i]) * 100, 2) for i in range(4)}
-    detected = CLASS_NAMES[np.argmax(preds)]
-    return detected, probs
 
+    probs = {
+        CLASS_NAMES[i]: float(preds[i]) * 100
+        for i in range(4)
+    }
+
+    detected = CLASS_NAMES[np.argmax(preds)]
+
+    return detected, probs
 
 # ================= MRI BOUNDING BOX =================
 # Uses the existing trained model; no retraining or weight updates.
