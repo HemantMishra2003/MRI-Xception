@@ -1098,13 +1098,31 @@ if uploaded_file and name and age:
                 "The classification result is still shown above."
             )
 
-    st.subheader(t("reference_header", lang))
-    cols = st.columns(4)
-    for col, cls in zip(cols, CLASS_IMAGE_MAP.keys()):
-        with col:
-            st.image(CLASS_IMAGE_MAP[cls], width=200)
-            st.markdown(f"<b>{cls}</b>", unsafe_allow_html=True)
-            st.markdown(f"{t('confidence_prefix', lang)}: {probs[cls]}%")
+ st.subheader(t("reference_header", lang))
+
+cols = st.columns(4)
+
+for col, cls in zip(cols, CLASS_IMAGE_MAP.keys()):
+
+    with col:
+
+        st.image(CLASS_IMAGE_MAP[cls], width=200)
+
+        st.markdown(
+            f"<b>{cls}</b>",
+            unsafe_allow_html=True
+        )
+
+        confidence = probs[cls]
+
+        if confidence >= 99.995:
+            confidence_display = "99.99%+"
+        else:
+            confidence_display = f"{confidence:.2f}%"
+
+        st.markdown(
+            f"Confidence: **{confidence_display}**"
+        )
 
     # ---- Symptom checklist + combined risk fusion ----
     risk_result = render_combined_risk_section(probs[detected], detected != "No Tumor", lang)
