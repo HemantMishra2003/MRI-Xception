@@ -277,39 +277,39 @@ def predict_mri(uploaded_file):
 # Uses the existing trained model; no retraining or weight updates.
 # Grad-CAM is used internally to estimate an attention region only.
 
-def _get_output_ndim(layer):
-    """Return the number of dimensions in a Keras layer output, if available."""
-    try:
-        shape = layer.output.shape
-        return len(shape) if shape is not None else None
-    except Exception:
-        return None
-
-
 def generate_bounding_box(uploaded_file, pred_index=None):
     """
-    Generates an approximate bounding box using the existing
-    trained Xception model's Grad-CAM localization information.
+    Generates improved approximate tumor localization using Grad-CAM.
+
+    Features:
+    - Improved heatmap processing
+    - Noise removal
+    - Morphological refinement
+    - Approximate region localization
+    - Heatmap overlay
+    - Bounding box visualization
 
     No retraining and no model weight changes.
-    The heatmap is used internally but is not displayed.
     """
 
     try:
-        # Preserve the original MRI dimensions
+        # ================= ORIGINAL MRI =================
         uploaded_file.seek(0)
+
         original_img = Image.open(uploaded_file).convert("RGB")
         original_rgb = np.array(original_img)
 
-        # Prepare image for the existing classifier
+        h, w = original_rgb.shape[:2]
+
+        # ================= PREPROCESS IMAGE =================
         resized_img = original_img.resize((299, 299))
+
         arr = np.asarray(resized_img, dtype=np.float32) / 255.0
         arr = np.expand_dims(arr, axis=0)
 
-        # Find the Xception base model
+        # ================= FIND XCEPTION BASE MODEL =================
         base_model = model.layers[0]
 
-        # Find the last four-dimensional layer
         last_conv_layer = None
 
         for layer in reversed(base_model.layers):
@@ -320,7 +320,7 @@ def generate_bounding_box(uploaded_file, pred_index=None):
         if last_conv_layer is None:
             return None
 
-        # Build a temporary model for localization
+        # ================= GRAD-CAM MODEL =================
         grad_model = tf.keras.models.Model(
             inputs=base_model.input,
             outputs=[
@@ -329,7 +329,7 @@ def generate_bounding_box(uploaded_file, pred_index=None):
             ]
         )
 
-        # Compute gradients without training the model
+        # ================= GRADIENT CALCULATION =================
         with tf.GradientTape() as tape:
 
             conv_outputs, base_output = grad_model(arr)
@@ -342,7 +342,9 @@ def generate_bounding_box(uploaded_file, pred_index=None):
             predictions = x
 
             if pred_index is None:
-                pred_index = int(tf.argmax(predictions[0]).numpy())
+                pred_index = int(
+                    tf.argmax(predictions[0]).numpy()
+                )
 
             class_channel = predictions[:, pred_index]
 
@@ -351,35 +353,84 @@ def generate_bounding_box(uploaded_file, pred_index=None):
         if grads is None:
             return None
 
-        # Calculate the localization heatmap internally
-        pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+        # ================= GRAD-CAM =================
+        pooled_grads = tf.reduce_mean(
+            grads,
+            axis=(0, 1, 2)
+        )
 
         conv_outputs = conv_outputs[0]
 
         heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
+
         heatmap = tf.squeeze(heatmap)
 
         heatmap = tf.maximum(heatmap, 0)
 
-        max_value = float(tf.reduce_max(heatmap).numpy())
+        max_value = float(
+            tf.reduce_max(heatmap).numpy()
+        )
 
         if max_value <= 1e-8:
             return None
 
         heatmap = heatmap / max_value
+
         heatmap = heatmap.numpy()
 
-        # Resize localization map to original MRI dimensions
-        h, w = original_rgb.shape[:2]
+        # ================= RESIZE HEATMAP =================
+        heatmap = cv2.resize(
+            heatmap,
+            (w, h),
+            interpolation=cv2.INTER_CUBIC
+        )
 
-        heatmap = cv2.resize(heatmap, (w, h))
+        heatmap = np.clip(heatmap, 0, 1)
 
-        # Threshold the strongest activation regions
-        threshold = 0.60 * float(heatmap.max())
+        # ================= SMOOTH HEATMAP =================
+        heatmap = cv2.GaussianBlur(
+            heatmap,
+            (9, 9),
+            0
+        )
 
-        binary_map = np.uint8(heatmap >= threshold) * 255
+        heatmap = cv2.normalize(
+            heatmap,
+            None,
+            0,
+            1,
+            cv2.NORM_MINMAX
+        )
 
-        # Find candidate regions
+        # ================= ADAPTIVE THRESHOLD =================
+        threshold = max(
+            0.40,
+            float(heatmap.max()) * 0.55
+        )
+
+        binary_map = np.uint8(
+            heatmap >= threshold
+        ) * 255
+
+        # ================= REMOVE NOISE =================
+        kernel = np.ones(
+            (5, 5),
+            np.uint8
+        )
+
+        binary_map = cv2.morphologyEx(
+            binary_map,
+            cv2.MORPH_OPEN,
+            kernel
+        )
+
+        binary_map = cv2.morphologyEx(
+            binary_map,
+            cv2.MORPH_CLOSE,
+            kernel
+        )
+
+        # ================= FIND CONTOURS =================
         contours, _ = cv2.findContours(
             binary_map,
             cv2.RETR_EXTERNAL,
@@ -389,46 +440,101 @@ def generate_bounding_box(uploaded_file, pred_index=None):
         if not contours:
             return None
 
-        # Select the largest connected candidate region
-        contour = max(contours, key=cv2.contourArea)
+        # ================= FILTER SMALL REGIONS =================
+        min_area = max(
+            20,
+            int((h * w) * 0.001)
+        )
+
+        valid_contours = [
+            contour
+            for contour in contours
+            if cv2.contourArea(contour) >= min_area
+        ]
+
+        if not valid_contours:
+            valid_contours = contours
+
+        # ================= SELECT MAIN REGION =================
+        contour = max(
+            valid_contours,
+            key=cv2.contourArea
+        )
 
         x, y, box_w, box_h = cv2.boundingRect(contour)
 
-        # Reject a degenerate box
         if box_w < 2 or box_h < 2:
             return None
 
-        # Draw a red bounding box on the original MRI
+        # ================= ADD SMALL PADDING =================
+        padding = int(
+            min(h, w) * 0.02
+        )
+
+        x1 = max(0, x - padding)
+        y1 = max(0, y - padding)
+
+        x2 = min(w, x + box_w + padding)
+        y2 = min(h, y + box_h + padding)
+
+        # ================= CREATE HEATMAP =================
+        heatmap_uint8 = np.uint8(
+            255 * heatmap
+        )
+
+        colored_heatmap = cv2.applyColorMap(
+            heatmap_uint8,
+            cv2.COLORMAP_JET
+        )
+
+        colored_heatmap = cv2.cvtColor(
+            colored_heatmap,
+            cv2.COLOR_BGR2RGB
+        )
+
+        # ================= OVERLAY HEATMAP =================
+        overlay = cv2.addWeighted(
+            original_rgb,
+            0.65,
+            colored_heatmap,
+            0.35,
+            0
+        )
+
+        # ================= DRAW BOUNDING BOX =================
         output_img = cv2.cvtColor(
-            original_rgb.copy(),
+            overlay,
             cv2.COLOR_RGB2BGR
         )
 
         cv2.rectangle(
             output_img,
-            (x, y),
-            (x + box_w, y + box_h),
-            (0, 0, 255),
+            (x1, y1),
+            (x2, y2),
+            (0, 255, 0),
             3
         )
 
-        # Label the box as approximate AI localization
-        label = "Approximate AI attention region"
+        # ================= LABEL =================
+        label = "AI Attention Region (Approx.)"
 
-        label_y = max(y - 10, 25)
+        label_y = max(
+            y1 - 12,
+            25
+        )
 
         cv2.putText(
             output_img,
             label,
-            (x, label_y),
+            (x1, label_y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
-            (0, 0, 255),
+            (0, 255, 0),
             2,
             cv2.LINE_AA
         )
 
-        # Convert back to RGB for Streamlit
+        # ================= CONVERT RGB =================
         output_img = cv2.cvtColor(
             output_img,
             cv2.COLOR_BGR2RGB
@@ -437,7 +543,11 @@ def generate_bounding_box(uploaded_file, pred_index=None):
         return output_img
 
     except Exception as e:
-        st.warning(f"Bounding box could not be generated: {e}")
+
+        st.warning(
+            f"Bounding box could not be generated: {e}"
+        )
+
         return None
 
 
